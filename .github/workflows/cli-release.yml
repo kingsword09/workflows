@@ -75,8 +75,6 @@ on:
     secrets:
       NPM_TOKEN:
         required: false
-      NPM_READ_TOKEN:
-        required: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -222,15 +220,8 @@ jobs:
           fi
           echo "Version validated: ${VERSION}"
 
-      - name: Install dependencies (with npm token)
-        if: steps.check_release.outputs.is_release == 'true' && steps.cmds.outputs.install != '' && inputs.packageManager != 'deno' && (secrets.NPM_READ_TOKEN != '' || secrets.NPM_TOKEN != '')
-        working-directory: ${{ inputs.workingDirectory }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_READ_TOKEN || secrets.NPM_TOKEN }}
-        run: ${{ steps.cmds.outputs.install }}
-
       - name: Install dependencies
-        if: steps.check_release.outputs.is_release == 'true' && steps.cmds.outputs.install != '' && (inputs.packageManager == 'deno' || (secrets.NPM_READ_TOKEN == '' && secrets.NPM_TOKEN == ''))
+        if: steps.check_release.outputs.is_release == 'true' && steps.cmds.outputs.install != ''
         working-directory: ${{ inputs.workingDirectory }}
         run: ${{ steps.cmds.outputs.install }}
 
@@ -435,15 +426,8 @@ jobs:
           fi
           echo "Version validated: ${VERSION}"
 
-      - name: Install dependencies (with npm token)
-        if: steps.check_release.outputs.is_release == 'true' && steps.cmds.outputs.install != '' && inputs.packageManager != 'deno' && (secrets.NPM_READ_TOKEN != '' || secrets.NPM_TOKEN != '')
-        working-directory: ${{ inputs.workingDirectory }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_READ_TOKEN || secrets.NPM_TOKEN }}
-        run: ${{ steps.cmds.outputs.install }}
-
       - name: Install dependencies
-        if: steps.check_release.outputs.is_release == 'true' && steps.cmds.outputs.install != '' && (inputs.packageManager == 'deno' || (secrets.NPM_READ_TOKEN == '' && secrets.NPM_TOKEN == ''))
+        if: steps.check_release.outputs.is_release == 'true' && steps.cmds.outputs.install != ''
         working-directory: ${{ inputs.workingDirectory }}
         run: ${{ steps.cmds.outputs.install }}
 

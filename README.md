@@ -47,7 +47,7 @@ jobs:
       packageManager: bun
 ```
 
-### Example: Release (npm publish)
+### Example: Release (npm publish with token)
 
 Create `.github/workflows/release.yml` in your project:
 
@@ -72,11 +72,33 @@ jobs:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 ```
 
+### Example: Release (npm trusted publishing / OIDC)
+
+```yaml
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  release:
+    permissions:
+      contents: write
+      id-token: write
+    uses: kingsword09/workflows/.github/workflows/cli-release.yml@v1
+    with:
+      packageManager: bun
+      trustedPublishing: true
+      # Optional: enable GitHub Environment protections/secrets
+      # environment: production
+```
+
 ## Notes
 
 - Release commit message default regex: `^(chore(release): |chore: release )v?(\d+\.\d+\.\d+)$`
 - If your scripts/commands differ, override via `*Command` inputs (e.g. `buildCommand`, `testCommand`).
 - Trusted publishing (OIDC):
-  - Set `trustedPublishing: true` and **do not** pass `NPM_TOKEN` (you still may need `NPM_READ_TOKEN` for private dependencies).
+  - Set `trustedPublishing: true` and do not pass `NPM_TOKEN`.
   - Your calling workflow must include `permissions: id-token: write`.
   - Configure the trusted publisher on npm to match your **calling workflow filename** (e.g. `release.yml` in your repo), not this repository's reusable workflow.
