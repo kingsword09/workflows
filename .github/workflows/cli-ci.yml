@@ -1,0 +1,208 @@
+name: Reusable CLI CI
+
+on:
+  workflow_call:
+    inputs:
+      packageManager:
+        description: "npm | pnpm | yarn | bun | deno"
+        required: true
+        type: string
+      workingDirectory:
+        description: "Working directory of the package"
+        required: false
+        type: string
+        default: "."
+      nodeVersion:
+        description: "Node.js version (ignored for deno)"
+        required: false
+        type: string
+        default: "20"
+      denoVersion:
+        description: "Deno version (only for deno)"
+        required: false
+        type: string
+        default: "v2.x"
+      skipOnReleaseCommit:
+        description: "Skip CI steps when commit message matches releaseCommitRegex"
+        required: false
+        type: boolean
+        default: true
+      releaseCommitRegex:
+        description: "Bash regex that captures a semver (first captured semver-like group is used)"
+        required: false
+        type: string
+        default: "^(chore\\(release\\): |chore: release )v?([0-9]+\\.[0-9]+\\.[0-9]+)$"
+      runLint:
+        required: false
+        type: boolean
+        default: true
+      runFormatCheck:
+        required: false
+        type: boolean
+        default: true
+      runTests:
+        required: false
+        type: boolean
+        default: true
+      installCommand:
+        description: "Override install command"
+        required: false
+        type: string
+        default: ""
+      lintCommand:
+        description: "Override lint command"
+        required: false
+        type: string
+        default: ""
+      formatCheckCommand:
+        description: "Override format check command"
+        required: false
+        type: string
+        default: ""
+      testCommand:
+        description: "Override test command"
+        required: false
+        type: string
+        default: ""
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Check if release commit
+        id: check_release
+        shell: bash
+        run: |
+          msg="$(git log -1 --pretty=%B)"
+          regex="${{ inputs.releaseCommitRegex }}"
+          if [[ "$msg" =~ $regex ]]; then
+            semver=""
+            for m in "${BASH_REMATCH[@]:1}"; do
+              if [[ "$m" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                semver="${m#v}"
+                break
+              fi
+            done
+            if [[ -z "$semver" ]]; then
+              echo "::error::releaseCommitRegex matched but no semver capture found"
+              exit 1
+            fi
+            version="v${semver}"
+            printf 'is_release=true\nversion=%s\n' "$version" >> "$GITHUB_OUTPUT"
+            echo "Detected release commit for version $version"
+          else
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Node.js
+        if: inputs.packageManager != 'deno'
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ inputs.nodeVersion }}
+
+      - name: Enable Corepack
+        if: inputs.packageManager == 'pnpm' || inputs.packageManager == 'yarn'
+        shell: bash
+        run: corepack enable
+
+      - name: Setup Bun
+        if: inputs.packageManager == 'bun'
+        uses: oven-sh/setup-bun@v1
+
+      - name: Setup Deno
+        if: inputs.packageManager == 'deno'
+        uses: denoland/setup-deno@v1
+        with:
+          deno-version: ${{ inputs.denoVersion }}
+
+      - name: Resolve commands
+        id: cmds
+        shell: bash
+        run: |
+          pm="${{ inputs.packageManager }}"
+
+          install="${{ inputs.installCommand }}"
+          lint="${{ inputs.lintCommand }}"
+          format_check="${{ inputs.formatCheckCommand }}"
+          test="${{ inputs.testCommand }}"
+
+          if [[ -z "$install" ]]; then
+            case "$pm" in
+              npm) install="npm install" ;;
+              pnpm) install="pnpm install" ;;
+              yarn) install="yarn install" ;;
+              bun) install="bun install" ;;
+              deno) install="" ;;
+              *)
+                echo "::error::Unsupported packageManager: $pm"
+                exit 1
+                ;;
+            esac
+          fi
+
+          if [[ -z "$lint" ]]; then
+            case "$pm" in
+              npm) lint="npm run lint" ;;
+              pnpm) lint="pnpm run lint" ;;
+              yarn) lint="yarn lint" ;;
+              bun) lint="bun run lint" ;;
+              deno) lint="deno lint" ;;
+              *) exit 1 ;;
+            esac
+          fi
+
+          if [[ -z "$format_check" ]]; then
+            case "$pm" in
+              npm) format_check="npm run format:check" ;;
+              pnpm) format_check="pnpm run format:check" ;;
+              yarn) format_check="yarn format:check" ;;
+              bun) format_check="bun run format:check" ;;
+              deno) format_check="deno fmt --check" ;;
+              *) exit 1 ;;
+            esac
+          fi
+
+          if [[ -z "$test" ]]; then
+            case "$pm" in
+              npm) test="npm test" ;;
+              pnpm) test="pnpm test" ;;
+              yarn) test="yarn test" ;;
+              bun) test="bun test" ;;
+              deno) test="deno test -A" ;;
+              *) exit 1 ;;
+            esac
+          fi
+
+          printf 'install=%s\n' "$install" >> "$GITHUB_OUTPUT"
+          printf 'lint=%s\n' "$lint" >> "$GITHUB_OUTPUT"
+          printf 'format_check=%s\n' "$format_check" >> "$GITHUB_OUTPUT"
+          printf 'test=%s\n' "$test" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        if: (!(inputs.skipOnReleaseCommit && steps.check_release.outputs.is_release == 'true')) && steps.cmds.outputs.install != ''
+        working-directory: ${{ inputs.workingDirectory }}
+        run: ${{ steps.cmds.outputs.install }}
+
+      - name: Lint
+        if: inputs.runLint && (!(inputs.skipOnReleaseCommit && steps.check_release.outputs.is_release == 'true'))
+        working-directory: ${{ inputs.workingDirectory }}
+        run: ${{ steps.cmds.outputs.lint }}
+
+      - name: Format check
+        if: inputs.runFormatCheck && (!(inputs.skipOnReleaseCommit && steps.check_release.outputs.is_release == 'true'))
+        working-directory: ${{ inputs.workingDirectory }}
+        run: ${{ steps.cmds.outputs.format_check }}
+
+      - name: Test
+        if: inputs.runTests && (!(inputs.skipOnReleaseCommit && steps.check_release.outputs.is_release == 'true'))
+        working-directory: ${{ inputs.workingDirectory }}
+        run: ${{ steps.cmds.outputs.test }}
