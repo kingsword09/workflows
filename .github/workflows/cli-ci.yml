@@ -105,9 +105,10 @@ jobs:
 
       - name: Setup Node.js
         if: inputs.packageManager != 'deno'
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ inputs.nodeVersion }}
+          cache: ${{ inputs.packageManager }}
 
       - name: Enable Corepack
         if: inputs.packageManager == 'pnpm' || inputs.packageManager == 'yarn'
