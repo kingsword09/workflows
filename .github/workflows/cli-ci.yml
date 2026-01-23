@@ -103,17 +103,17 @@ jobs:
             echo "is_release=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Enable Corepack (before setup-node for cache)
+        if: inputs.packageManager == 'pnpm' || inputs.packageManager == 'yarn'
+        shell: bash
+        run: corepack enable
+
       - name: Setup Node.js
         if: inputs.packageManager != 'deno'
         uses: actions/setup-node@v6
         with:
           node-version: ${{ inputs.nodeVersion }}
           cache: ${{ inputs.packageManager }}
-
-      - name: Enable Corepack
-        if: inputs.packageManager == 'pnpm' || inputs.packageManager == 'yarn'
-        shell: bash
-        run: corepack enable
 
       - name: Setup Bun
         if: inputs.packageManager == 'bun'
