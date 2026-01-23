@@ -1,0 +1,509 @@
+name: Reusable CLI Release
+
+on:
+  workflow_call:
+    inputs:
+      packageManager:
+        description: "npm | pnpm | yarn | bun | deno"
+        required: true
+        type: string
+      environment:
+        description: "Optional GitHub Environment name (enables environment protections/secrets)"
+        required: false
+        type: string
+        default: ""
+      workingDirectory:
+        description: "Working directory of the package"
+        required: false
+        type: string
+        default: "."
+      nodeVersion:
+        description: "Node.js version (ignored for deno)"
+        required: false
+        type: string
+        default: "20"
+      denoVersion:
+        description: "Deno version (only for deno)"
+        required: false
+        type: string
+        default: "v2.x"
+      releaseCommitRegex:
+        description: "Bash regex that captures a semver (first captured semver-like group is used)"
+        required: false
+        type: string
+        default: "^(chore\\(release\\): |chore: release )v?([0-9]+\\.[0-9]+\\.[0-9]+)$"
+      validateVersion:
+        description: "Validate package version matches the release commit message"
+        required: false
+        type: boolean
+        default: true
+      createGitTag:
+        description: "Create/push git tag for the version"
+        required: false
+        type: boolean
+        default: true
+      updateNpm:
+        description: "Update npm to latest before publishing (Node package managers only)"
+        required: false
+        type: boolean
+        default: true
+      trustedPublishing:
+        description: "Use npm Trusted Publishing (OIDC) for npm publish (no NPM_TOKEN required; non-deno only)"
+        required: false
+        type: boolean
+        default: false
+      installCommand:
+        description: "Override install command"
+        required: false
+        type: string
+        default: ""
+      buildCommand:
+        description: "Override build command"
+        required: false
+        type: string
+        default: ""
+      publishCommand:
+        description: "Override publish command"
+        required: false
+        type: string
+        default: ""
+      changelogCommand:
+        description: "Override changelog/release command (empty to skip)"
+        required: false
+        type: string
+        default: ""
+    secrets:
+      NPM_TOKEN:
+        required: false
+      NPM_READ_TOKEN:
+        required: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release:
+    if: inputs.environment == ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Check if release commit
+        id: check_release
+        shell: bash
+        run: |
+          msg="$(git log -1 --pretty=%B)"
+          regex="${{ inputs.releaseCommitRegex }}"
+          if [[ "$msg" =~ $regex ]]; then
+            semver=""
+            for m in "${BASH_REMATCH[@]:1}"; do
+              if [[ "$m" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                semver="${m#v}"
+                break
+              fi
+            done
+            if [[ -z "$semver" ]]; then
+              echo "::error::releaseCommitRegex matched but no semver capture found"
+              exit 1
+            fi
+            version="v${semver}"
+            printf 'is_release=true\nversion=%s\n' "$version" >> "$GITHUB_OUTPUT"
+            echo "Detected release commit for version $version"
+          else
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+            echo "Not a release commit, skipping"
+          fi
+
+      - name: Setup Node.js
+        if: steps.check_release.outputs.is_release == 'true' && inputs.packageManager != 'deno'
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ inputs.nodeVersion }}
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Enable Corepack
+        if: steps.check_release.outputs.is_release == 'true' && (inputs.packageManager == 'pnpm' || inputs.packageManager == 'yarn')
+        shell: bash
+        run: corepack enable
+
+      - name: Setup Bun
+        if: steps.check_release.outputs.is_release == 'true' && inputs.packageManager == 'bun'
+        uses: oven-sh/setup-bun@v1
+
+      - name: Setup Deno
+        if: steps.check_release.outputs.is_release == 'true' && inputs.packageManager == 'deno'
+        uses: denoland/setup-deno@v1
+        with:
+          deno-version: ${{ inputs.denoVersion }}
+
+      - name: Resolve commands
+        if: steps.check_release.outputs.is_release == 'true'
+        id: cmds
+        shell: bash
+        run: |
+          pm="${{ inputs.packageManager }}"
+          wd="${{ inputs.workingDirectory }}"
+
+          install="${{ inputs.installCommand }}"
+          build="${{ inputs.buildCommand }}"
+          publish="${{ inputs.publishCommand }}"
+          changelog="${{ inputs.changelogCommand }}"
+
+          if [[ -z "$install" ]]; then
+            case "$pm" in
+              npm) install="npm ci" ;;
+              pnpm) install="pnpm install --frozen-lockfile" ;;
+              yarn)
+                if [[ -f "$wd/.yarnrc.yml" || -d "$wd/.yarn" ]]; then
+                  install="yarn install --immutable"
+                else
+                  install="yarn install --frozen-lockfile"
+                fi
+                ;;
+              bun) install="bun install --frozen-lockfile" ;;
+              deno) install="" ;;
+              *)
+                echo "::error::Unsupported packageManager: $pm"
+                exit 1
+                ;;
+            esac
+          fi
+
+          if [[ -z "$build" ]]; then
+            case "$pm" in
+              npm) build="npm run build" ;;
+              pnpm) build="pnpm run build" ;;
+              yarn) build="yarn build" ;;
+              bun) build="bun run build" ;;
+              deno) build="deno task build" ;;
+              *) exit 1 ;;
+            esac
+          fi
+
+          if [[ -z "$publish" ]]; then
+            case "$pm" in
+              npm|pnpm|yarn|bun) publish="npm publish --access public" ;;
+              deno) publish="deno publish" ;;
+              *) exit 1 ;;
+            esac
+          fi
+
+          if [[ -z "$changelog" ]]; then
+            case "$pm" in
+              bun) changelog="bunx --bun changelogithub" ;;
+              npm|pnpm|yarn) changelog="npx changelogithub" ;;
+              deno) changelog="" ;;
+              *) exit 1 ;;
+            esac
+          fi
+
+          printf 'install=%s\n' "$install" >> "$GITHUB_OUTPUT"
+          printf 'build=%s\n' "$build" >> "$GITHUB_OUTPUT"
+          printf 'publish=%s\n' "$publish" >> "$GITHUB_OUTPUT"
+          printf 'changelog=%s\n' "$changelog" >> "$GITHUB_OUTPUT"
+
+      - name: Validate version
+        if: steps.check_release.outputs.is_release == 'true' && inputs.packageManager != 'deno' && inputs.validateVersion
+        working-directory: ${{ inputs.workingDirectory }}
+        shell: bash
+        run: |
+          VERSION="${{ steps.check_release.outputs.version }}"
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "v${PKG_VERSION}" != "${VERSION}" ]; then
+            echo "::error::Version mismatch: commit says ${VERSION} but package.json has v${PKG_VERSION}"
+            exit 1
+          fi
+          echo "Version validated: ${VERSION}"
+
+      - name: Install dependencies (with npm token)
+        if: steps.check_release.outputs.is_release == 'true' && steps.cmds.outputs.install != '' && inputs.packageManager != 'deno' && (secrets.NPM_READ_TOKEN != '' || secrets.NPM_TOKEN != '')
+        working-directory: ${{ inputs.workingDirectory }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_READ_TOKEN || secrets.NPM_TOKEN }}
+        run: ${{ steps.cmds.outputs.install }}
+
+      - name: Install dependencies
+        if: steps.check_release.outputs.is_release == 'true' && steps.cmds.outputs.install != '' && (inputs.packageManager == 'deno' || (secrets.NPM_READ_TOKEN == '' && secrets.NPM_TOKEN == ''))
+        working-directory: ${{ inputs.workingDirectory }}
+        run: ${{ steps.cmds.outputs.install }}
+
+      - name: Build
+        if: steps.check_release.outputs.is_release == 'true'
+        working-directory: ${{ inputs.workingDirectory }}
+        run: ${{ steps.cmds.outputs.build }}
+
+      - name: Create Git tag
+        if: steps.check_release.outputs.is_release == 'true' && inputs.createGitTag
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          VERSION="${{ steps.check_release.outputs.version }}"
+
+          if git rev-parse "$VERSION" >/dev/null 2>&1; then
+            echo "Tag $VERSION already exists"
+          else
+            git tag "$VERSION"
+            git push origin "$VERSION"
+            echo "Created and pushed tag $VERSION"
+          fi
+
+      - name: Update npm
+        if: steps.check_release.outputs.is_release == 'true' && inputs.packageManager != 'deno' && (inputs.updateNpm || inputs.trustedPublishing)
+        run: npm install -g npm@latest
+
+      - name: Validate NPM_TOKEN
+        if: steps.check_release.outputs.is_release == 'true' && inputs.packageManager != 'deno' && !inputs.trustedPublishing
+        shell: bash
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [[ -z "${NPM_TOKEN}" ]]; then
+            echo "::error::Missing required secret NPM_TOKEN for npm publish"
+            exit 1
+          fi
+
+      - name: Publish (npm token)
+        if: steps.check_release.outputs.is_release == 'true' && inputs.packageManager != 'deno' && !inputs.trustedPublishing
+        working-directory: ${{ inputs.workingDirectory }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: ${{ steps.cmds.outputs.publish }}
+
+      - name: Publish (trusted publishing)
+        if: steps.check_release.outputs.is_release == 'true' && inputs.packageManager != 'deno' && inputs.trustedPublishing
+        working-directory: ${{ inputs.workingDirectory }}
+        run: ${{ steps.cmds.outputs.publish }}
+
+      - name: Publish (deno)
+        if: steps.check_release.outputs.is_release == 'true' && inputs.packageManager == 'deno'
+        working-directory: ${{ inputs.workingDirectory }}
+        run: ${{ steps.cmds.outputs.publish }}
+
+      - name: Generate changelog and create release
+        if: steps.check_release.outputs.is_release == 'true' && steps.cmds.outputs.changelog != ''
+        working-directory: ${{ inputs.workingDirectory }}
+        run: ${{ steps.cmds.outputs.changelog }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+  release_with_environment:
+    if: inputs.environment != ''
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Check if release commit
+        id: check_release
+        shell: bash
+        run: |
+          msg="$(git log -1 --pretty=%B)"
+          regex="${{ inputs.releaseCommitRegex }}"
+          if [[ "$msg" =~ $regex ]]; then
+            semver=""
+            for m in "${BASH_REMATCH[@]:1}"; do
+              if [[ "$m" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                semver="${m#v}"
+                break
+              fi
+            done
+            if [[ -z "$semver" ]]; then
+              echo "::error::releaseCommitRegex matched but no semver capture found"
+              exit 1
+            fi
+            version="v${semver}"
+            printf 'is_release=true\nversion=%s\n' "$version" >> "$GITHUB_OUTPUT"
+            echo "Detected release commit for version $version"
+          else
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+            echo "Not a release commit, skipping"
+          fi
+
+      - name: Setup Node.js
+        if: steps.check_release.outputs.is_release == 'true' && inputs.packageManager != 'deno'
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ inputs.nodeVersion }}
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Enable Corepack
+        if: steps.check_release.outputs.is_release == 'true' && (inputs.packageManager == 'pnpm' || inputs.packageManager == 'yarn')
+        shell: bash
+        run: corepack enable
+
+      - name: Setup Bun
+        if: steps.check_release.outputs.is_release == 'true' && inputs.packageManager == 'bun'
+        uses: oven-sh/setup-bun@v1
+
+      - name: Setup Deno
+        if: steps.check_release.outputs.is_release == 'true' && inputs.packageManager == 'deno'
+        uses: denoland/setup-deno@v1
+        with:
+          deno-version: ${{ inputs.denoVersion }}
+
+      - name: Resolve commands
+        if: steps.check_release.outputs.is_release == 'true'
+        id: cmds
+        shell: bash
+        run: |
+          pm="${{ inputs.packageManager }}"
+          wd="${{ inputs.workingDirectory }}"
+
+          install="${{ inputs.installCommand }}"
+          build="${{ inputs.buildCommand }}"
+          publish="${{ inputs.publishCommand }}"
+          changelog="${{ inputs.changelogCommand }}"
+
+          if [[ -z "$install" ]]; then
+            case "$pm" in
+              npm) install="npm ci" ;;
+              pnpm) install="pnpm install --frozen-lockfile" ;;
+              yarn)
+                if [[ -f "$wd/.yarnrc.yml" || -d "$wd/.yarn" ]]; then
+                  install="yarn install --immutable"
+                else
+                  install="yarn install --frozen-lockfile"
+                fi
+                ;;
+              bun) install="bun install --frozen-lockfile" ;;
+              deno) install="" ;;
+              *)
+                echo "::error::Unsupported packageManager: $pm"
+                exit 1
+                ;;
+            esac
+          fi
+
+          if [[ -z "$build" ]]; then
+            case "$pm" in
+              npm) build="npm run build" ;;
+              pnpm) build="pnpm run build" ;;
+              yarn) build="yarn build" ;;
+              bun) build="bun run build" ;;
+              deno) build="deno task build" ;;
+              *) exit 1 ;;
+            esac
+          fi
+
+          if [[ -z "$publish" ]]; then
+            case "$pm" in
+              npm|pnpm|yarn|bun) publish="npm publish --access public" ;;
+              deno) publish="deno publish" ;;
+              *) exit 1 ;;
+            esac
+          fi
+
+          if [[ -z "$changelog" ]]; then
+            case "$pm" in
+              bun) changelog="bunx --bun changelogithub" ;;
+              npm|pnpm|yarn) changelog="npx changelogithub" ;;
+              deno) changelog="" ;;
+              *) exit 1 ;;
+            esac
+          fi
+
+          printf 'install=%s\n' "$install" >> "$GITHUB_OUTPUT"
+          printf 'build=%s\n' "$build" >> "$GITHUB_OUTPUT"
+          printf 'publish=%s\n' "$publish" >> "$GITHUB_OUTPUT"
+          printf 'changelog=%s\n' "$changelog" >> "$GITHUB_OUTPUT"
+
+      - name: Validate version
+        if: steps.check_release.outputs.is_release == 'true' && inputs.packageManager != 'deno' && inputs.validateVersion
+        working-directory: ${{ inputs.workingDirectory }}
+        shell: bash
+        run: |
+          VERSION="${{ steps.check_release.outputs.version }}"
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "v${PKG_VERSION}" != "${VERSION}" ]; then
+            echo "::error::Version mismatch: commit says ${VERSION} but package.json has v${PKG_VERSION}"
+            exit 1
+          fi
+          echo "Version validated: ${VERSION}"
+
+      - name: Install dependencies (with npm token)
+        if: steps.check_release.outputs.is_release == 'true' && steps.cmds.outputs.install != '' && inputs.packageManager != 'deno' && (secrets.NPM_READ_TOKEN != '' || secrets.NPM_TOKEN != '')
+        working-directory: ${{ inputs.workingDirectory }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_READ_TOKEN || secrets.NPM_TOKEN }}
+        run: ${{ steps.cmds.outputs.install }}
+
+      - name: Install dependencies
+        if: steps.check_release.outputs.is_release == 'true' && steps.cmds.outputs.install != '' && (inputs.packageManager == 'deno' || (secrets.NPM_READ_TOKEN == '' && secrets.NPM_TOKEN == ''))
+        working-directory: ${{ inputs.workingDirectory }}
+        run: ${{ steps.cmds.outputs.install }}
+
+      - name: Build
+        if: steps.check_release.outputs.is_release == 'true'
+        working-directory: ${{ inputs.workingDirectory }}
+        run: ${{ steps.cmds.outputs.build }}
+
+      - name: Create Git tag
+        if: steps.check_release.outputs.is_release == 'true' && inputs.createGitTag
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          VERSION="${{ steps.check_release.outputs.version }}"
+
+          if git rev-parse "$VERSION" >/dev/null 2>&1; then
+            echo "Tag $VERSION already exists"
+          else
+            git tag "$VERSION"
+            git push origin "$VERSION"
+            echo "Created and pushed tag $VERSION"
+          fi
+
+      - name: Update npm
+        if: steps.check_release.outputs.is_release == 'true' && inputs.packageManager != 'deno' && (inputs.updateNpm || inputs.trustedPublishing)
+        run: npm install -g npm@latest
+
+      - name: Validate NPM_TOKEN
+        if: steps.check_release.outputs.is_release == 'true' && inputs.packageManager != 'deno' && !inputs.trustedPublishing
+        shell: bash
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [[ -z "${NPM_TOKEN}" ]]; then
+            echo "::error::Missing required secret NPM_TOKEN for npm publish"
+            exit 1
+          fi
+
+      - name: Publish (npm token)
+        if: steps.check_release.outputs.is_release == 'true' && inputs.packageManager != 'deno' && !inputs.trustedPublishing
+        working-directory: ${{ inputs.workingDirectory }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: ${{ steps.cmds.outputs.publish }}
+
+      - name: Publish (trusted publishing)
+        if: steps.check_release.outputs.is_release == 'true' && inputs.packageManager != 'deno' && inputs.trustedPublishing
+        working-directory: ${{ inputs.workingDirectory }}
+        run: ${{ steps.cmds.outputs.publish }}
+
+      - name: Publish (deno)
+        if: steps.check_release.outputs.is_release == 'true' && inputs.packageManager == 'deno'
+        working-directory: ${{ inputs.workingDirectory }}
+        run: ${{ steps.cmds.outputs.publish }}
+
+      - name: Generate changelog and create release
+        if: steps.check_release.outputs.is_release == 'true' && steps.cmds.outputs.changelog != ''
+        working-directory: ${{ inputs.workingDirectory }}
+        run: ${{ steps.cmds.outputs.changelog }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}

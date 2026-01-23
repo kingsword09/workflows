@@ -1,124 +1,82 @@
-# Reusable GitHub Actions
+# Reusable GitHub Actions Workflows
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](./LICENSE)
 
-This repository provides a collection of **reusable GitHub Actions** designed to help developers simplify and standardize their CI/CD workflows.
+This repository provides **reusable GitHub Actions workflows** (via `workflow_call`) to standardize CI/CD across multiple projects.
 
-## Project Goals
+## Available Workflows
 
-By providing validated, reusable GitHub Actions, we enable teams to:
+### CLI CI
 
-- 🚀 **Rapid Integration** - Use pre-built Actions directly without rewriting from scratch
-- 🔄 **Standardized Processes** - Ensure all projects use consistent build and deployment workflows
-- 📦 **Reduced Maintenance** - Centrally manage common workflows and eliminate duplicated code
-- ✨ **Increased Productivity** - Focus on business logic instead of infrastructure configuration
+- Workflow file: `.github/workflows/cli-ci.yml`
+- Use case: Node/Bun/Deno CLI projects
+- Package managers: `npm`, `pnpm`, `yarn`, `bun`, `deno`
+- Default behavior: skips CI steps for release commits (`chore(release): vX.Y.Z` or `chore: release vX.Y.Z`)
 
-## Available Actions
+### CLI Release
 
-This repository contains reusable Actions of the following types:
-
-| Category | Description | Status |
-|----------|-------------|--------|
-| Build | Build workflows for various programming languages | 🚧 In Development |
-| Test | Automated test execution | 🚧 In Development |
-| Deploy | Multi-environment deployment processes | 🚧 In Development |
-| Code Quality | Linting, formatting, and security scanning | 🚧 In Development |
+- Workflow file: `.github/workflows/cli-release.yml`
+- Use case: publish a CLI tool on release commits (`chore(release): vX.Y.Z` or `chore: release vX.Y.Z`)
+- Default behavior:
+  - Validates `package.json#version` matches the commit version (non-`deno`)
+  - Creates/pushes a git tag `vX.Y.Z`
+  - Builds and publishes to npm (`npm|pnpm|yarn|bun`)
+  - Creates a GitHub Release via `changelogithub`
 
 ## Quick Start
 
-### Using in Your Project
+Pin to a tag (recommended) when calling these workflows, e.g. `@v1`.
 
-Create workflow files in your `.github/workflows/` directory and reference these Actions using the `uses` statement:
+### Example: CI
+
+Create `.github/workflows/ci.yml` in your project:
 
 ```yaml
-name: CI Pipeline
+name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      # Use reusable build Action
-      - uses: ./path/to/reusable-action/build
-        with:
-          node-version: '18'
-
-      # Use reusable test Action
-      - uses: ./path/to/reusable-action/test
-        with:
-          coverage: true
+  ci:
+    uses: kingsword09/workflows/.github/workflows/cli-ci.yml@v1
+    with:
+      packageManager: bun
 ```
 
-## Directory Structure
+### Example: Release (npm publish)
 
-```
-.
-├── .github/
-│   └── workflows/          # GitHub Actions workflows
-├── actions/                # Reusable Actions
-│   ├── build/              # Build-related Actions
-│   ├── test/               # Test-related Actions
-│   ├── deploy/             # Deployment Actions
-│   └── shared/             # Shared helper scripts and utilities
-├── docs/                   # Documentation
-└── README.md
-```
+Create `.github/workflows/release.yml` in your project:
 
-## Development Guide
+```yaml
+name: Release
 
-### Creating a New Reusable Action
+on:
+  push:
+    branches: [main]
 
-1. Create a new Action directory under `actions/`
-2. Add an `action.yml` or `action.yaml` configuration file
-3. Implement the Action logic (JavaScript/TypeScript/Composite)
-4. Write documentation and examples
-5. Add corresponding tests
-
-### Testing Actions
-
-Before submitting, ensure your Actions are tested:
-
-```bash
-# Run local tests
-npm test
-
-# Validate syntax
-actionlint
+jobs:
+  release:
+    permissions:
+      contents: write
+      id-token: write
+    uses: kingsword09/workflows/.github/workflows/cli-release.yml@v1
+    with:
+      packageManager: bun
+      # Optional: enable GitHub Environment protections/secrets
+      # environment: production
+    secrets:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 ```
 
-## Best Practices
+## Notes
 
-- ✅ **Single Responsibility** - Each Action should handle one specific task
-- ✅ **Parameterized** - Use `inputs` to make Actions flexible
-- ✅ **Well Documented** - Clearly explain usage and parameters
-- ✅ **Error Handling** - Provide clear error messages and exit codes
-- ✅ **Version Pinning** - Use fixed version tags in production
-
-## Contributing
-
-Issues and Pull Requests are welcome!
-
-Please read [CONTRIBUTING.md](./CONTRIBUTING.md) for detailed information.
-
-## License
-
-This project is licensed under the Apache 2.0 License - see the [LICENSE](./LICENSE) file for details.
-
-## Support
-
-If you have any questions or suggestions:
-
-- Submit an [Issue](../../issues)
-- Check the [Documentation](./docs/)
-- Contact the maintainers
-
----
-
-**Making CI/CD simpler and development more efficient!** 🎉
+- Release commit message default regex: `^(chore(release): |chore: release )v?(\d+\.\d+\.\d+)$`
+- If your scripts/commands differ, override via `*Command` inputs (e.g. `buildCommand`, `testCommand`).
+- Trusted publishing (OIDC):
+  - Set `trustedPublishing: true` and **do not** pass `NPM_TOKEN` (you still may need `NPM_READ_TOKEN` for private dependencies).
+  - Your calling workflow must include `permissions: id-token: write`.
+  - Configure the trusted publisher on npm to match your **calling workflow filename** (e.g. `release.yml` in your repo), not this repository's reusable workflow.
