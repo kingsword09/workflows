@@ -31,7 +31,7 @@ on:
         description: "Bash regex that captures a semver (first captured semver-like group is used)"
         required: false
         type: string
-        default: "^(chore\\(release\\): |chore: release )v?([0-9]+\\.[0-9]+\\.[0-9]+)$"
+        default: "^(chore\\(release\\):\\s*|chore:\\s*release\\s+)v?([0-9]+\\.[0-9]+\\.[0-9]+)(\\s|$)"
       runLint:
         required: false
         type: boolean
@@ -82,7 +82,7 @@ jobs:
         id: check_release
         shell: bash
         run: |
-          msg="$(git log -1 --pretty=%B)"
+          msg="$(git log -1 --pretty=%s)"
           regex="${{ inputs.releaseCommitRegex }}"
           if [[ "$msg" =~ $regex ]]; then
             semver=""
@@ -104,23 +104,29 @@ jobs:
           fi
 
       - name: Enable Corepack (before setup-node for cache)
-        if: inputs.packageManager == 'pnpm' || inputs.packageManager == 'yarn'
+        if: (inputs.packageManager == 'pnpm' || inputs.packageManager == 'yarn') && (!(inputs.skipOnReleaseCommit && steps.check_release.outputs.is_release == 'true'))
         shell: bash
         run: corepack enable
 
-      - name: Setup Node.js
-        if: inputs.packageManager != 'deno'
+      - name: Setup Node.js (with cache)
+        if: (inputs.packageManager == 'npm' || inputs.packageManager == 'pnpm' || inputs.packageManager == 'yarn') && (!(inputs.skipOnReleaseCommit && steps.check_release.outputs.is_release == 'true'))
         uses: actions/setup-node@v6
         with:
           node-version: ${{ inputs.nodeVersion }}
           cache: ${{ inputs.packageManager }}
 
+      - name: Setup Node.js
+        if: inputs.packageManager == 'bun' && (!(inputs.skipOnReleaseCommit && steps.check_release.outputs.is_release == 'true'))
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.nodeVersion }}
+
       - name: Setup Bun
-        if: inputs.packageManager == 'bun'
+        if: inputs.packageManager == 'bun' && (!(inputs.skipOnReleaseCommit && steps.check_release.outputs.is_release == 'true'))
         uses: oven-sh/setup-bun@v1
 
       - name: Setup Deno
-        if: inputs.packageManager == 'deno'
+        if: inputs.packageManager == 'deno' && (!(inputs.skipOnReleaseCommit && steps.check_release.outputs.is_release == 'true'))
         uses: denoland/setup-deno@v1
         with:
           deno-version: ${{ inputs.denoVersion }}

@@ -1,4 +1,4 @@
-name: Reusable CLI Release
+name: Reusable CLI Release (Tag)
 
 on:
   workflow_call:
@@ -27,18 +27,13 @@ on:
         required: false
         type: string
         default: "v2.x"
-      releaseCommitRegex:
-        description: "Bash regex that captures a semver (first captured semver-like group is used)"
+      releaseTag:
+        description: "Override tag name (e.g. v1.2.3). If empty, derives from github ref (refs/tags/*)"
         required: false
         type: string
-        default: "^(chore\\(release\\):\\s*|chore:\\s*release\\s+)v?([0-9]+\\.[0-9]+\\.[0-9]+)(\\s|$)"
+        default: ""
       validateVersion:
-        description: "Validate package version matches the release commit message"
-        required: false
-        type: boolean
-        default: true
-      createGitTag:
-        description: "Create/push git tag for the version"
+        description: "Validate package version matches the tag version"
         required: false
         type: boolean
         default: true
@@ -58,7 +53,7 @@ on:
         type: string
         default: ""
       buildCommand:
-        description: "Override build command"
+        description: "Override build command (empty = auto: skip if prepublishOnly/prepack exists, else run default)"
         required: false
         type: string
         default: ""
@@ -93,56 +88,56 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Check if release commit
-        id: check_release
+      - name: Resolve release tag
+        id: tag
         shell: bash
         run: |
-          msg="$(git log -1 --pretty=%s)"
-          regex="${{ inputs.releaseCommitRegex }}"
-          if [[ "$msg" =~ $regex ]]; then
-            semver=""
-            for m in "${BASH_REMATCH[@]:1}"; do
-              if [[ "$m" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-                semver="${m#v}"
-                break
-              fi
-            done
-            if [[ -z "$semver" ]]; then
-              echo "::error::releaseCommitRegex matched but no semver capture found"
+          tag_input="${{ inputs.releaseTag }}"
+          if [[ -n "$tag_input" ]]; then
+            tag="$tag_input"
+          else
+            ref="${GITHUB_REF}"
+            if [[ "$ref" == refs/tags/* ]]; then
+              tag="${ref#refs/tags/}"
+            else
+              echo "::error::Not running on a tag. Trigger your caller workflow on tag push, or set inputs.releaseTag."
               exit 1
             fi
-            version="v${semver}"
-            printf 'is_release=true\nversion=%s\n' "$version" >> "$GITHUB_OUTPUT"
-            echo "Detected release commit for version $version"
-          else
-            echo "is_release=false" >> "$GITHUB_OUTPUT"
-            echo "Not a release commit, skipping"
           fi
 
+          if [[ "$tag" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            semver="${tag#v}"
+          else
+            echo "::error::Invalid tag: '$tag' (expected vX.Y.Z)"
+            exit 1
+          fi
+
+          printf 'tag=v%s\nversion=%s\n' "$semver" "$semver" >> "$GITHUB_OUTPUT"
+          echo "Release tag: v$semver"
+
       - name: Setup Node.js
-        if: steps.check_release.outputs.is_release == 'true' && inputs.packageManager != 'deno'
+        if: inputs.packageManager != 'deno'
         uses: actions/setup-node@v6
         with:
           node-version: ${{ inputs.nodeVersion }}
           registry-url: "https://registry.npmjs.org"
 
       - name: Enable Corepack
-        if: steps.check_release.outputs.is_release == 'true' && (inputs.packageManager == 'pnpm' || inputs.packageManager == 'yarn')
+        if: inputs.packageManager == 'pnpm' || inputs.packageManager == 'yarn'
         shell: bash
         run: corepack enable
 
       - name: Setup Bun
-        if: steps.check_release.outputs.is_release == 'true' && inputs.packageManager == 'bun'
+        if: inputs.packageManager == 'bun'
         uses: oven-sh/setup-bun@v1
 
       - name: Setup Deno
-        if: steps.check_release.outputs.is_release == 'true' && inputs.packageManager == 'deno'
+        if: inputs.packageManager == 'deno'
         uses: denoland/setup-deno@v1
         with:
           deno-version: ${{ inputs.denoVersion }}
 
       - name: Resolve commands
-        if: steps.check_release.outputs.is_release == 'true'
         id: cmds
         shell: bash
         run: |
@@ -216,51 +211,34 @@ jobs:
           printf 'changelog=%s\n' "$changelog" >> "$GITHUB_OUTPUT"
 
       - name: Validate version
-        if: steps.check_release.outputs.is_release == 'true' && inputs.packageManager != 'deno' && inputs.validateVersion
+        if: inputs.packageManager != 'deno' && inputs.validateVersion
         working-directory: ${{ inputs.workingDirectory }}
         shell: bash
         run: |
-          VERSION="${{ steps.check_release.outputs.version }}"
+          VERSION="${{ steps.tag.outputs.version }}"
           PKG_VERSION=$(node -p "require('./package.json').version")
-          if [ "v${PKG_VERSION}" != "${VERSION}" ]; then
-            echo "::error::Version mismatch: commit says ${VERSION} but package.json has v${PKG_VERSION}"
+          if [ "${PKG_VERSION}" != "${VERSION}" ]; then
+            echo "::error::Version mismatch: tag is v${VERSION} but package.json has v${PKG_VERSION}"
             exit 1
           fi
-          echo "Version validated: ${VERSION}"
+          echo "Version validated: v${VERSION}"
 
       - name: Install dependencies
-        if: steps.check_release.outputs.is_release == 'true' && steps.cmds.outputs.install != ''
+        if: steps.cmds.outputs.install != ''
         working-directory: ${{ inputs.workingDirectory }}
         run: ${{ steps.cmds.outputs.install }}
 
       - name: Build
-        if: steps.check_release.outputs.is_release == 'true' && steps.cmds.outputs.build != ''
+        if: steps.cmds.outputs.build != ''
         working-directory: ${{ inputs.workingDirectory }}
         run: ${{ steps.cmds.outputs.build }}
 
-      - name: Create Git tag
-        if: steps.check_release.outputs.is_release == 'true' && inputs.createGitTag
-        shell: bash
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          VERSION="${{ steps.check_release.outputs.version }}"
-
-          if git rev-parse "$VERSION" >/dev/null 2>&1; then
-            echo "Tag $VERSION already exists"
-          else
-            git tag "$VERSION"
-            git push origin "$VERSION"
-            echo "Created and pushed tag $VERSION"
-          fi
-
       - name: Update npm
-        if: steps.check_release.outputs.is_release == 'true' && inputs.packageManager != 'deno' && (inputs.updateNpm || inputs.trustedPublishing)
+        if: inputs.packageManager != 'deno' && (inputs.updateNpm || inputs.trustedPublishing)
         run: npm install -g npm@latest
 
       - name: Validate NPM_TOKEN
-        if: steps.check_release.outputs.is_release == 'true' && inputs.packageManager != 'deno' && !inputs.trustedPublishing
+        if: inputs.packageManager != 'deno' && !inputs.trustedPublishing
         shell: bash
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -271,24 +249,24 @@ jobs:
           fi
 
       - name: Publish (npm token)
-        if: steps.check_release.outputs.is_release == 'true' && inputs.packageManager != 'deno' && !inputs.trustedPublishing
+        if: inputs.packageManager != 'deno' && !inputs.trustedPublishing
         working-directory: ${{ inputs.workingDirectory }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: ${{ steps.cmds.outputs.publish }}
 
       - name: Publish (trusted publishing)
-        if: steps.check_release.outputs.is_release == 'true' && inputs.packageManager != 'deno' && inputs.trustedPublishing
+        if: inputs.packageManager != 'deno' && inputs.trustedPublishing
         working-directory: ${{ inputs.workingDirectory }}
         run: ${{ steps.cmds.outputs.publish }}
 
       - name: Publish (deno)
-        if: steps.check_release.outputs.is_release == 'true' && inputs.packageManager == 'deno'
+        if: inputs.packageManager == 'deno'
         working-directory: ${{ inputs.workingDirectory }}
         run: ${{ steps.cmds.outputs.publish }}
 
       - name: Generate changelog and create release
-        if: steps.check_release.outputs.is_release == 'true' && steps.cmds.outputs.changelog != ''
+        if: steps.cmds.outputs.changelog != ''
         working-directory: ${{ inputs.workingDirectory }}
         run: ${{ steps.cmds.outputs.changelog }}
         env:
@@ -307,56 +285,56 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Check if release commit
-        id: check_release
+      - name: Resolve release tag
+        id: tag
         shell: bash
         run: |
-          msg="$(git log -1 --pretty=%s)"
-          regex="${{ inputs.releaseCommitRegex }}"
-          if [[ "$msg" =~ $regex ]]; then
-            semver=""
-            for m in "${BASH_REMATCH[@]:1}"; do
-              if [[ "$m" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-                semver="${m#v}"
-                break
-              fi
-            done
-            if [[ -z "$semver" ]]; then
-              echo "::error::releaseCommitRegex matched but no semver capture found"
+          tag_input="${{ inputs.releaseTag }}"
+          if [[ -n "$tag_input" ]]; then
+            tag="$tag_input"
+          else
+            ref="${GITHUB_REF}"
+            if [[ "$ref" == refs/tags/* ]]; then
+              tag="${ref#refs/tags/}"
+            else
+              echo "::error::Not running on a tag. Trigger your caller workflow on tag push, or set inputs.releaseTag."
               exit 1
             fi
-            version="v${semver}"
-            printf 'is_release=true\nversion=%s\n' "$version" >> "$GITHUB_OUTPUT"
-            echo "Detected release commit for version $version"
-          else
-            echo "is_release=false" >> "$GITHUB_OUTPUT"
-            echo "Not a release commit, skipping"
           fi
 
+          if [[ "$tag" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            semver="${tag#v}"
+          else
+            echo "::error::Invalid tag: '$tag' (expected vX.Y.Z)"
+            exit 1
+          fi
+
+          printf 'tag=v%s\nversion=%s\n' "$semver" "$semver" >> "$GITHUB_OUTPUT"
+          echo "Release tag: v$semver"
+
       - name: Setup Node.js
-        if: steps.check_release.outputs.is_release == 'true' && inputs.packageManager != 'deno'
+        if: inputs.packageManager != 'deno'
         uses: actions/setup-node@v6
         with:
           node-version: ${{ inputs.nodeVersion }}
           registry-url: "https://registry.npmjs.org"
 
       - name: Enable Corepack
-        if: steps.check_release.outputs.is_release == 'true' && (inputs.packageManager == 'pnpm' || inputs.packageManager == 'yarn')
+        if: inputs.packageManager == 'pnpm' || inputs.packageManager == 'yarn'
         shell: bash
         run: corepack enable
 
       - name: Setup Bun
-        if: steps.check_release.outputs.is_release == 'true' && inputs.packageManager == 'bun'
+        if: inputs.packageManager == 'bun'
         uses: oven-sh/setup-bun@v1
 
       - name: Setup Deno
-        if: steps.check_release.outputs.is_release == 'true' && inputs.packageManager == 'deno'
+        if: inputs.packageManager == 'deno'
         uses: denoland/setup-deno@v1
         with:
           deno-version: ${{ inputs.denoVersion }}
 
       - name: Resolve commands
-        if: steps.check_release.outputs.is_release == 'true'
         id: cmds
         shell: bash
         run: |
@@ -430,51 +408,34 @@ jobs:
           printf 'changelog=%s\n' "$changelog" >> "$GITHUB_OUTPUT"
 
       - name: Validate version
-        if: steps.check_release.outputs.is_release == 'true' && inputs.packageManager != 'deno' && inputs.validateVersion
+        if: inputs.packageManager != 'deno' && inputs.validateVersion
         working-directory: ${{ inputs.workingDirectory }}
         shell: bash
         run: |
-          VERSION="${{ steps.check_release.outputs.version }}"
+          VERSION="${{ steps.tag.outputs.version }}"
           PKG_VERSION=$(node -p "require('./package.json').version")
-          if [ "v${PKG_VERSION}" != "${VERSION}" ]; then
-            echo "::error::Version mismatch: commit says ${VERSION} but package.json has v${PKG_VERSION}"
+          if [ "${PKG_VERSION}" != "${VERSION}" ]; then
+            echo "::error::Version mismatch: tag is v${VERSION} but package.json has v${PKG_VERSION}"
             exit 1
           fi
-          echo "Version validated: ${VERSION}"
+          echo "Version validated: v${VERSION}"
 
       - name: Install dependencies
-        if: steps.check_release.outputs.is_release == 'true' && steps.cmds.outputs.install != ''
+        if: steps.cmds.outputs.install != ''
         working-directory: ${{ inputs.workingDirectory }}
         run: ${{ steps.cmds.outputs.install }}
 
       - name: Build
-        if: steps.check_release.outputs.is_release == 'true' && steps.cmds.outputs.build != ''
+        if: steps.cmds.outputs.build != ''
         working-directory: ${{ inputs.workingDirectory }}
         run: ${{ steps.cmds.outputs.build }}
 
-      - name: Create Git tag
-        if: steps.check_release.outputs.is_release == 'true' && inputs.createGitTag
-        shell: bash
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          VERSION="${{ steps.check_release.outputs.version }}"
-
-          if git rev-parse "$VERSION" >/dev/null 2>&1; then
-            echo "Tag $VERSION already exists"
-          else
-            git tag "$VERSION"
-            git push origin "$VERSION"
-            echo "Created and pushed tag $VERSION"
-          fi
-
       - name: Update npm
-        if: steps.check_release.outputs.is_release == 'true' && inputs.packageManager != 'deno' && (inputs.updateNpm || inputs.trustedPublishing)
+        if: inputs.packageManager != 'deno' && (inputs.updateNpm || inputs.trustedPublishing)
         run: npm install -g npm@latest
 
       - name: Validate NPM_TOKEN
-        if: steps.check_release.outputs.is_release == 'true' && inputs.packageManager != 'deno' && !inputs.trustedPublishing
+        if: inputs.packageManager != 'deno' && !inputs.trustedPublishing
         shell: bash
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -485,24 +446,24 @@ jobs:
           fi
 
       - name: Publish (npm token)
-        if: steps.check_release.outputs.is_release == 'true' && inputs.packageManager != 'deno' && !inputs.trustedPublishing
+        if: inputs.packageManager != 'deno' && !inputs.trustedPublishing
         working-directory: ${{ inputs.workingDirectory }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: ${{ steps.cmds.outputs.publish }}
 
       - name: Publish (trusted publishing)
-        if: steps.check_release.outputs.is_release == 'true' && inputs.packageManager != 'deno' && inputs.trustedPublishing
+        if: inputs.packageManager != 'deno' && inputs.trustedPublishing
         working-directory: ${{ inputs.workingDirectory }}
         run: ${{ steps.cmds.outputs.publish }}
 
       - name: Publish (deno)
-        if: steps.check_release.outputs.is_release == 'true' && inputs.packageManager == 'deno'
+        if: inputs.packageManager == 'deno'
         working-directory: ${{ inputs.workingDirectory }}
         run: ${{ steps.cmds.outputs.publish }}
 
       - name: Generate changelog and create release
-        if: steps.check_release.outputs.is_release == 'true' && steps.cmds.outputs.changelog != ''
+        if: steps.cmds.outputs.changelog != ''
         working-directory: ${{ inputs.workingDirectory }}
         run: ${{ steps.cmds.outputs.changelog }}
         env:
