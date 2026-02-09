@@ -1,0 +1,33 @@
+name: Repository CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  workflow-quality:
+    name: Workflow quality checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Validate YAML syntax
+        shell: bash
+        run: |
+          ruby -ryaml -e 'Dir[".github/**/*.yml"].sort.each { |f| YAML.load_file(f); puts "OK #{f}" }'
+
+      - name: Lint GitHub Actions workflows
+        uses: rhysd/actionlint@0933c147c9d6587653d45fdcb4c497c57a65f9af # v1.7.10
