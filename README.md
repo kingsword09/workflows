@@ -110,7 +110,8 @@ jobs:
 - This repository also includes a self CI workflow at `.github/workflows/repo-ci.yml` to validate workflow YAML and lint workflows on `push`/`pull_request` to `main`.
 - This repository includes a self release workflow at `.github/workflows/repo-release.yml`:
   - Auto trigger on tag push `vX.Y.Z`
-  - Manual trigger via `workflow_dispatch` with `releaseTag`
+  - Manual trigger via `workflow_dispatch` with `releaseTag` (`vX.Y.Z` or `X.Y.Z`)
+  - For manual trigger, creates the release tag automatically if missing
   - Creates/updates GitHub Release for `vX.Y.Z`
   - Moves major tag `vX` to the latest `vX.Y.Z` commit
 - If your scripts/commands differ, override via `*Command` inputs (e.g. `buildCommand`, `testCommand`).
@@ -131,4 +132,5 @@ git push origin v1.2.3
 Alternative trigger (manual):
 
 - GitHub Actions → `Repository Release` → `Run workflow`
-- Input `releaseTag`, for example `v1.2.3`
+- Input `releaseTag`, for example `v1.2.3` (or `1.2.3`)
+- If this tag does not exist, the workflow creates it automatically from the run commit and then creates the Release
