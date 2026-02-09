@@ -189,10 +189,12 @@ jobs:
             esac
           fi
 
-          printf 'install=%s\n' "$install" >> "$GITHUB_OUTPUT"
-          printf 'lint=%s\n' "$lint" >> "$GITHUB_OUTPUT"
-          printf 'format_check=%s\n' "$format_check" >> "$GITHUB_OUTPUT"
-          printf 'test=%s\n' "$test" >> "$GITHUB_OUTPUT"
+          {
+            printf 'install=%s\n' "$install"
+            printf 'lint=%s\n' "$lint"
+            printf 'format_check=%s\n' "$format_check"
+            printf 'test=%s\n' "$test"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
         if: (!(inputs.skipOnReleaseCommit && steps.check_release.outputs.is_release == 'true')) && steps.cmds.outputs.install != ''

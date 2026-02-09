@@ -107,6 +107,7 @@ jobs:
 
 - Tag release expects tag format: `vX.Y.Z` (you can override via `releaseTag`)
 - Commit/CI release regex default: `^(chore\\(release\\):\\s*|chore:\\s*release\\s+)v?(\\d+\\.\\d+\\.\\d+)(\\s|$)`
+- This repository also includes a self CI workflow at `.github/workflows/repo-ci.yml` to validate workflow YAML and lint workflows on `push`/`pull_request` to `main`.
 - If your scripts/commands differ, override via `*Command` inputs (e.g. `buildCommand`, `testCommand`).
 - Trusted publishing (OIDC):
   - Set `trustedPublishing: true` and do not pass `NPM_TOKEN`.

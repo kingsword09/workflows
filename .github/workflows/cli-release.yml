@@ -210,10 +210,12 @@ jobs:
             esac
           fi
 
-          printf 'install=%s\n' "$install" >> "$GITHUB_OUTPUT"
-          printf 'build=%s\n' "$build" >> "$GITHUB_OUTPUT"
-          printf 'publish=%s\n' "$publish" >> "$GITHUB_OUTPUT"
-          printf 'changelog=%s\n' "$changelog" >> "$GITHUB_OUTPUT"
+          {
+            printf 'install=%s\n' "$install"
+            printf 'build=%s\n' "$build"
+            printf 'publish=%s\n' "$publish"
+            printf 'changelog=%s\n' "$changelog"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Validate version
         if: steps.check_release.outputs.is_release == 'true' && inputs.packageManager != 'deno' && inputs.validateVersion
@@ -424,10 +426,12 @@ jobs:
             esac
           fi
 
-          printf 'install=%s\n' "$install" >> "$GITHUB_OUTPUT"
-          printf 'build=%s\n' "$build" >> "$GITHUB_OUTPUT"
-          printf 'publish=%s\n' "$publish" >> "$GITHUB_OUTPUT"
-          printf 'changelog=%s\n' "$changelog" >> "$GITHUB_OUTPUT"
+          {
+            printf 'install=%s\n' "$install"
+            printf 'build=%s\n' "$build"
+            printf 'publish=%s\n' "$publish"
+            printf 'changelog=%s\n' "$changelog"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Validate version
         if: steps.check_release.outputs.is_release == 'true' && inputs.packageManager != 'deno' && inputs.validateVersion
