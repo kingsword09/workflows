@@ -108,8 +108,27 @@ jobs:
 - Tag release expects tag format: `vX.Y.Z` (you can override via `releaseTag`)
 - Commit/CI release regex default: `^(chore\\(release\\):\\s*|chore:\\s*release\\s+)v?(\\d+\\.\\d+\\.\\d+)(\\s|$)`
 - This repository also includes a self CI workflow at `.github/workflows/repo-ci.yml` to validate workflow YAML and lint workflows on `push`/`pull_request` to `main`.
+- This repository includes a self release workflow at `.github/workflows/repo-release.yml`:
+  - Auto trigger on tag push `vX.Y.Z`
+  - Manual trigger via `workflow_dispatch` with `releaseTag`
+  - Creates/updates GitHub Release for `vX.Y.Z`
+  - Moves major tag `vX` to the latest `vX.Y.Z` commit
 - If your scripts/commands differ, override via `*Command` inputs (e.g. `buildCommand`, `testCommand`).
 - Trusted publishing (OIDC):
   - Set `trustedPublishing: true` and do not pass `NPM_TOKEN`.
   - Your calling workflow must include `permissions: id-token: write`.
   - Configure the trusted publisher on npm to match your **calling workflow filename** (e.g. `release.yml` in your repo), not this repository's reusable workflow.
+
+## Releasing This Repository
+
+Recommended trigger (tag push):
+
+```bash
+git tag v1.2.3
+git push origin v1.2.3
+```
+
+Alternative trigger (manual):
+
+- GitHub Actions → `Repository Release` → `Run workflow`
+- Input `releaseTag`, for example `v1.2.3`
