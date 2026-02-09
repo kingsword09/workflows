@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       releaseTag:
-        description: "Release tag to publish (vX.Y.Z)"
+        description: "Release version/tag (vX.Y.Z or X.Y.Z)"
         required: true
         type: string
 
@@ -32,17 +32,18 @@ jobs:
         shell: bash
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            tag="${{ inputs.releaseTag }}"
+            raw_tag="${{ inputs.releaseTag }}"
           else
-            tag="${GITHUB_REF_NAME}"
+            raw_tag="${GITHUB_REF_NAME}"
           fi
 
-          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Invalid release tag '$tag' (expected vX.Y.Z)"
+          if [[ ! "$raw_tag" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid release tag/version '$raw_tag' (expected vX.Y.Z or X.Y.Z)"
             exit 1
           fi
 
-          semver="${tag#v}"
+          semver="${raw_tag#v}"
+          tag="v${semver}"
           major_tag="v${semver%%.*}"
 
           {
@@ -50,16 +51,29 @@ jobs:
             printf 'major_tag=%s\n' "$major_tag"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Ensure release tag exists
+      - name: Ensure release tag exists (or create for manual run)
         shell: bash
         run: |
           tag="${{ steps.meta.outputs.tag }}"
           git fetch --force --tags origin
 
-          if ! git rev-parse "$tag^{commit}" >/dev/null 2>&1; then
+          if git rev-parse "$tag^{commit}" >/dev/null 2>&1; then
+            echo "Tag '$tag' already exists"
+            exit 0
+          fi
+
+          if [[ "${{ github.event_name }}" != "workflow_dispatch" ]]; then
             echo "::error::Tag '$tag' does not exist in repository"
             exit 1
           fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git tag "$tag" "$GITHUB_SHA"
+          git push origin "refs/tags/$tag"
+
+          echo "Created tag '$tag' at commit '$GITHUB_SHA'"
 
       - name: Create GitHub release
         env:
